@@ -155,8 +155,11 @@ module.exports = Structures.extend('Message', Message => {
 			const hasPermission = this.command.hasPermission(this);
 			if(!hasPermission || typeof hasPermission === 'string') {
 				this.client.emit('commandBlocked', this, 'permission');
-				if(typeof hasPermission === 'string') return this.reply(hasPermission);
-				else return this.reply(`You do not have permission to use the \`${this.command.name}\` command.`);
+				if(typeof hasPermission === 'string')
+					return this.reply(hasPermission);
+				else if(this.client.options.missingPermissionsResponse)
+					return this.reply(`You do not have permission to use the \`${this.command.name}\` command.`);
+				else return;
 			}
 
 			// Ensure the client user has the required permissions
