@@ -18,34 +18,34 @@ class CommandoRegistry {
 		Object.defineProperty(this, 'client', { value: client });
 
 		/**
-		 * Registered commands
+		 * Registered commands, mapped by their name
 		 * @type {Collection<string, Command>}
 		 */
 		this.commands = new discord.Collection();
 
 		/**
-		 * Registered command groups
+		 * Registered command groups, mapped by their ID
 		 * @type {Collection<string, CommandGroup>}
 		 */
 		this.groups = new discord.Collection();
 
 		/**
-		 * Registered argument types
+		 * Registered argument types, mapped by their ID
 		 * @type {Collection<string, ArgumentType>}
 		 */
 		this.types = new discord.Collection();
-
-		/**
-		 * Registered objects for the eval command
-		 * @type {Object}
-		 */
-		this.evalObjects = {};
 
 		/**
 		 * Fully resolved path to the bot's commands directory
 		 * @type {?string}
 		 */
 		this.commandsPath = null;
+
+		/**
+		 * Command to run when an unknown command is used
+		 * @type {?Command}
+		 */
+		this.unknownCommand = null;
 	}
 
 	/**
@@ -138,11 +138,13 @@ class CommandoRegistry {
 		if(group.commands.some(cmd => cmd.memberName === command.memberName)) {
 			throw new Error(`A command with the member name "${command.memberName}" is already registered in ${group.id}`);
 		}
+		if(command.unknown && this.unknownCommand) throw new Error('An unknown command is already registered.');
 
 		// Add the command
 		command.group = group;
 		group.commands.set(command.name, command);
 		this.commands.set(command.name, command);
+		if(command.unknown) this.unknownCommand = command;
 
 		/**
 		 * Emitted when a command is registered
@@ -165,7 +167,9 @@ class CommandoRegistry {
 	registerCommands(commands, ignoreInvalid = false) {
 		if(!Array.isArray(commands)) throw new TypeError('Commands must be an Array.');
 		for(const command of commands) {
-			if(ignoreInvalid && typeof command !== 'function' && !(command instanceof Command)) {
+			const valid = typeof command === 'function' || typeof command.default === 'function' ||
+				command instanceof Command || command.default instanceof Command;
+			if(ignoreInvalid && !valid) {
 				this.client.emit('warn', `Attempting to register an invalid command object: ${command}; skipping.`);
 				continue;
 			}
@@ -203,7 +207,11 @@ class CommandoRegistry {
 	 * @see {@link CommandoRegistry#registerTypes}
 	 */
 	registerType(type) {
-		if(typeof type === 'function') type = new type(this.client); // eslint-disable-line new-cap
+		/* eslint-disable new-cap */
+		if(typeof type === 'function') type = new type(this.client);
+		else if(typeof type.default === 'function') type = new type.default(this.client);
+		/* eslint-enable new-cap */
+
 		if(!(type instanceof ArgumentType)) throw new Error(`Invalid type object to register: ${type}`);
 
 		// Make sure there aren't any conflicts
@@ -233,7 +241,9 @@ class CommandoRegistry {
 	registerTypes(types, ignoreInvalid = false) {
 		if(!Array.isArray(types)) throw new TypeError('Types must be an Array.');
 		for(const type of types) {
-			if(ignoreInvalid && typeof type !== 'function' && !(type instanceof ArgumentType)) {
+			const valid = typeof type === 'function' || typeof type.default === 'function' ||
+				type instanceof ArgumentType || type.default instanceof ArgumentType;
+			if(ignoreInvalid && !valid) {
 				this.client.emit('warn', `Attempting to register an invalid argument type object: ${type}; skipping.`);
 				continue;
 			}
@@ -291,16 +301,22 @@ class CommandoRegistry {
 	 * @param {boolean} [commands.eval=true] - Whether to register the built-in eval command
 	 * (requires "util" group and "string" type)
 	 * @param {boolean} [commands.ping=true] - Whether to register the built-in ping command (requires "util" group)
+	 * @param {boolean} [commands.unknownCommand=true] - Whether to register the built-in unknown command
+	 * (requires "util" group)
 	 * @param {boolean} [commands.commandState=true] - Whether to register the built-in command state commands
 	 * (enable, disable, load, unload, reload, list groups - requires "commands" group, "command" type, and "group" type)
 	 * @return {CommandoRegistry}
 	 */
 	registerDefaultCommands(commands = {}) {
-		commands = { help: true, prefix: true, ping: true, eval: true, commandState: true, ...commands };
+		commands = {
+			help: true, prefix: true, ping: true, eval: true,
+			unknownCommand: true, commandState: true, ...commands
+		};
 		if(commands.help) this.registerCommand(require('./commands/util/help'));
 		if(commands.prefix) this.registerCommand(require('./commands/util/prefix'));
 		if(commands.ping) this.registerCommand(require('./commands/util/ping'));
 		if(commands.eval) this.registerCommand(require('./commands/util/eval'));
+		if(commands.unknownCommand) this.registerCommand(require('./commands/util/unknown-command'));
 		if(commands.commandState) {
 			this.registerCommands([
 				require('./commands/commands/groups'),
@@ -329,6 +345,7 @@ class CommandoRegistry {
 	 * @param {boolean} [types.voiceChannel=true] - Whether to register the built-in voice-channel type
 	 * @param {boolean} [types.categoryChannel=true] - Whether to register the built-in category-channel type
 	 * @param {boolean} [types.message=true] - Whether to register the built-in message type
+	 * @param {boolean} [types.customEmoji=true] - Whether to register the built-in custom-emoji type
 	 * @param {boolean} [types.command=true] - Whether to register the built-in command type
 	 * @param {boolean} [types.group=true] - Whether to register the built-in group type
 	 * @return {CommandoRegistry}
@@ -337,8 +354,8 @@ class CommandoRegistry {
 		types = {
 			string: true, integer: true, float: true, boolean: true,
 			user: true, member: true, role: true, channel: true, textChannel: true,
-			voiceChannel: true, categoryChannel: true, message: true, command: true,
-			group: true, ...types
+			voiceChannel: true, categoryChannel: true, message: true, customEmoji: true,
+			command: true, group: true, ...types
 		};
 		if(types.string) this.registerType(require('./types/string'));
 		if(types.integer) this.registerType(require('./types/integer'));
@@ -352,6 +369,7 @@ class CommandoRegistry {
 		if(types.voiceChannel) this.registerType(require('./types/voice-channel'));
 		if(types.categoryChannel) this.registerType(require('./types/category-channel'));
 		if(types.message) this.registerType(require('./types/message'));
+		if(types.customEmoji) this.registerType(require('./types/custom-emoji'));
 		if(types.command) this.registerType(require('./types/command'));
 		if(types.group) this.registerType(require('./types/group'));
 		return this;
@@ -371,10 +389,15 @@ class CommandoRegistry {
 		if(command.name !== oldCommand.name) throw new Error('Command name cannot change.');
 		if(command.groupID !== oldCommand.groupID) throw new Error('Command group cannot change.');
 		if(command.memberName !== oldCommand.memberName) throw new Error('Command memberName cannot change.');
+		if(command.unknown && this.unknownCommand !== oldCommand) {
+			throw new Error('An unknown command is already registered.');
+		}
 
 		command.group = this.resolveGroup(command.groupID);
 		command.group.commands.set(command.name, command);
 		this.commands.set(command.name, command);
+		if(this.unknownCommand === oldCommand) this.unknownCommand = null;
+		if(command.unknown) this.unknownCommand = command;
 
 		/**
 		 * Emitted when a command is reregistered
@@ -393,6 +416,8 @@ class CommandoRegistry {
 	unregisterCommand(command) {
 		this.commands.delete(command.name);
 		command.group.commands.delete(command.name);
+		if(this.unknownCommand === command) this.unknownCommand = null;
+
 		/**
 		 * Emitted when a command is unregistered
 		 * @event CommandoClient#commandUnregister
@@ -400,29 +425,6 @@ class CommandoRegistry {
 		 */
 		this.client.emit('commandUnregister', command);
 		this.client.emit('debug', `Unregistered command ${command.groupID}:${command.memberName}.`);
-	}
-
-	/**
-	 * Registers a single object to be usable by the eval command
-	 * @param {string} key - The key for the object
-	 * @param {Object} obj - The object
-	 * @return {CommandoRegistry}
-	 * @see {@link CommandoRegistry#registerEvalObjects}
-	 */
-	registerEvalObject(key, obj) {
-		const registerObj = {};
-		registerObj[key] = obj;
-		return this.registerEvalObjects(registerObj);
-	}
-
-	/**
-	 * Registers multiple objects to be usable by the eval command
-	 * @param {Object} obj - An object of keys: values
-	 * @return {CommandoRegistry}
-	 */
-	registerEvalObjects(obj) {
-		Object.assign(this.evalObjects, obj);
-		return this;
 	}
 
 	/**
