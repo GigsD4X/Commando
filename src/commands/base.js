@@ -309,7 +309,7 @@ class Command {
 				return message.reply(`The \`${this.name}\` command can only be used in NSFW channels.`);
 			case 'permission': {
 				if(data.response) return message.reply(data.response);
-				return message.reply(`You do not have permission to use the \`${this.name}\` command.`);
+				return null;
 			}
 			case 'clientPermissions': {
 				if(data.missing.length === 1) {
@@ -323,9 +323,7 @@ class Command {
 				`);
 			}
 			case 'throttling': {
-				return message.reply(
-					`You may not use the \`${this.name}\` command again for another ${data.remaining.toFixed(1)} seconds.`
-				);
+				return null;
 			}
 			default:
 				return null;
